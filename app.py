@@ -133,12 +133,22 @@ with st.sidebar:
     if env_key == "din_gemini_api_noegle_her":
         env_key = ""
 
-    api_key = st.text_input(
-        "Gemini API-nøgle",
-        value=env_key,
-        type="password",
-        help="Hentes automatisk fra .env / Streamlit Secrets hvis sat, eller indtastes her.",
-    )
+    if env_key:
+        st.success("🔒 Gemini API-nøgle er indlæst sikkert på serveren.")
+        custom_key = st.text_input(
+            "Skift API-nøgle (valgfrit)",
+            value="",
+            type="password",
+            help="Lad feltet stå tomt for at bruge serverens nøgle.",
+        )
+        api_key = custom_key.strip() or env_key
+    else:
+        api_key = st.text_input(
+            "Gemini API-nøgle",
+            value="",
+            type="password",
+            help="Indtast din Gemini API-nøgle fra Google AI Studio.",
+        )
     model_name = st.selectbox("Gemini-model", AVAILABLE_MODELS, index=0)
 
     st.divider()
