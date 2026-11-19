@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from datetime import date
 
 from fpdf import FPDF
@@ -109,15 +110,8 @@ def _draw_labeled_items(pdf: _MealPlanPDF, label: str, items: list[str]) -> None
     pdf.set_x(pdf.l_margin)
 
 
-def _draw_meal_day(pdf: _MealPlanPDF, day: MealDay, include_recipes: bool) -> None:
-    """Tegner én ugedag med titel, varer og eventuelle tilberedningstrin."""
-    if pdf.get_y() > pdf.h - pdf.b_margin - 40:
-        pdf.add_page()
-
-    badge = "Restedag" if day.is_leftover_day else f"ca. {day.prep_time_minutes} min"
-    _draw_banner_bar(pdf, f"{day.day}: {day.dish_name}  ({badge})")
-    pdf.ln(1.5)
-
+def _draw_day_details(pdf: _MealPlanPDF, day: MealDay) -> None:
+    """Tegner beskrivelse og ingredienslister fra aktuel venstremargin."""
     if _clean_text(day.description):
         pdf.set_x(pdf.l_margin)
         pdf.set_font("Helvetica", size=9.5)
@@ -134,6 +128,46 @@ def _draw_meal_day(pdf: _MealPlanPDF, day: MealDay, include_recipes: bool) -> No
     _draw_labeled_items(pdf, "Tilbudsvarer", day.offer_ingredients)
     _draw_labeled_items(pdf, "Øvrige varer", day.extra_ingredients)
     _draw_labeled_items(pdf, "Basisvarer", day.pantry_staples)
+
+
+def _draw_meal_day(
+    pdf: _MealPlanPDF,
+    day: MealDay,
+    include_recipes: bool,
+    image_bytes: bytes | None = None,
+) -> None:
+    """Tegner én ugedag med titel, evt. foto, varer og eventuelle tilberedningstrin."""
+    min_space = 55 if image_bytes else 40
+    if pdf.get_y() > pdf.h - pdf.b_margin - min_space:
+        pdf.add_page()
+
+    badge = "Restedag" if day.is_leftover_day else f"ca. {day.prep_time_minutes} min"
+    _draw_banner_bar(pdf, f"{day.day}: {day.dish_name}  ({badge})")
+    pdf.ln(1.5)
+
+    if image_bytes:
+        orig_l_margin = pdf.l_margin
+        y_top = pdf.get_y()
+        start_page = pdf.page_no()
+        img_w = 42.0
+        img_h = 31.5
+
+        pdf.image(io.BytesIO(image_bytes), x=orig_l_margin, y=y_top, w=img_w, h=img_h)
+        pdf.set_draw_color(215, 220, 226)
+        pdf.rect(orig_l_margin, y_top, img_w, img_h)
+
+        text_x = orig_l_margin + img_w + 4.0
+        try:
+            pdf.set_left_margin(text_x)
+            pdf.set_xy(text_x, y_top)
+            _draw_day_details(pdf, day)
+        finally:
+            pdf.set_left_margin(orig_l_margin)
+            if pdf.page_no() == start_page:
+                pdf.set_y(max(pdf.get_y(), y_top + img_h + 2.0))
+            pdf.set_x(orig_l_margin)
+    else:
+        _draw_day_details(pdf, day)
 
     if include_recipes and day.recipe_steps:
         steps = [_clean_text(s) for s in day.recipe_steps if _clean_text(s)]
@@ -207,7 +241,12 @@ def _draw_shopping_group(pdf: _MealPlanPDF, title: str, items: list[str]) -> Non
     pdf.ln(3)
 
 
-def build_meal_plan_pdf(plan: WeeklyMealPlan, include_recipes: bool = True) -> bytes:
+def build_meal_plan_pdf(
+    plan: WeeklyMealPlan,
+    include_recipes: bool = True,
+    meal_images: dict[int, bytes] | None = None,
+    include_images: bool = True,
+) -> bytes:
     """Bygger en komplet, printklar A4-PDF med madplan og indkøbsliste."""
     pdf = _MealPlanPDF(orientation="P", unit="mm", format="A4")
     pdf.set_margins(left=15, top=15, right=15)
@@ -242,8 +281,16 @@ def build_meal_plan_pdf(plan: WeeklyMealPlan, include_recipes: bool = True) -> b
         )
         pdf.ln(4)
 
-    for day in plan.days:
-        _draw_meal_day(pdf, day, include_recipes=include_recipes)
+    for idx, day in enumerate(plan.days):
+        image_bytes = (
+            meal_images.get(idx) if (include_images and meal_images) else None
+        )
+        _draw_meal_day(
+            pdf,
+            day,
+            include_recipes=include_recipes,
+            image_bytes=image_bytes,
+        )
 
     # --- DEL 2: INDKØBSLISTE (NY SIDE) ---
     pdf.add_page()
