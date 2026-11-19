@@ -17,6 +17,7 @@ from src.offers import (
     fetch_offers_for_stores,
     geocode_postal_code,
 )
+from src.pdf_export import build_meal_plan_pdf
 from src.planner import DEFAULT_MODEL, generate_weekly_plan, replace_single_day
 
 load_dotenv()
@@ -68,6 +69,49 @@ def _init_state() -> None:
         st.session_state["location_label"] = "Herning"
     if "meal_plan" not in st.session_state:
         st.session_state["meal_plan"] = None
+    if "pdf_include_recipes" not in st.session_state:
+        st.session_state["pdf_include_recipes"] = True
+
+
+def _sync_recipes_checkbox(widget_key: str) -> None:
+    st.session_state["pdf_include_recipes"] = bool(st.session_state[widget_key])
+
+
+def _render_export_bar(plan: WeeklyMealPlan, key_prefix: str) -> None:
+    """Viser boks med valg til PDF-udskrift samt download-knapper til PDF og Markdown."""
+    widget_key = f"{key_prefix}_pdf_recipes"
+    st.session_state[widget_key] = st.session_state["pdf_include_recipes"]
+    with st.container(border=True):
+        include_recipes = st.checkbox(
+            "Medtag tilberedningstrin (opskrifter) i PDF-udskriften",
+            key=widget_key,
+            on_change=_sync_recipes_checkbox,
+            args=(widget_key,),
+        )
+        col_pdf, col_md = st.columns([2, 1])
+        with col_pdf:
+            st.download_button(
+                label="🖨️ Download printklar PDF (A4)",
+                data=build_meal_plan_pdf(plan, include_recipes=include_recipes),
+                file_name="ugens_madplan_og_indkoeb.pdf",
+                mime="application/pdf",
+                type="primary",
+                use_container_width=True,
+                key=f"{key_prefix}_dl_pdf",
+            )
+        with col_md:
+            st.download_button(
+                label="⬇️ Download som tekst (.md)",
+                data=_plan_to_markdown(plan),
+                file_name="ugens_madplan.md",
+                mime="text/markdown",
+                use_container_width=True,
+                key=f"{key_prefix}_dl_md",
+            )
+        st.caption(
+            "💡 Åbn PDF'en og tryk Udskriv (Ctrl+P på pc eller ⋮ → Udskriv på mobilen). "
+            "Indkøbslisten starter automatisk på sin egen side."
+        )
 
 
 def _plan_to_markdown(plan: WeeklyMealPlan) -> str:
@@ -275,6 +319,7 @@ with tab_plan:
     if plan is not None:
         st.success(plan.summary)
         st.caption(f"💡 {plan.estimated_offer_savings_note}")
+        _render_export_bar(plan, key_prefix="plan")
 
         for idx, day in enumerate(plan.days):
             with st.container(border=True):
@@ -331,12 +376,7 @@ with tab_shop:
     if plan is None:
         st.info("Generér en madplan først for at se den samlede indkøbsliste.")
     else:
-        st.download_button(
-            label="⬇️ Download madplan & indkøbsliste (.md)",
-            data=_plan_to_markdown(plan),
-            file_name="ugens_madplan.md",
-            mime="text/markdown",
-        )
+        _render_export_bar(plan, key_prefix="shop")
         st.divider()
 
         if plan.shopping_list_by_store:
