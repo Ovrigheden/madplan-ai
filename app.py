@@ -289,12 +289,6 @@ with tab_plan:
                             st.markdown(f"{step_i}. {step}")
 
                 with action_col:
-                    custom_note = st.text_input(
-                        "Ønske (valgfrit)",
-                        key=f"note_{idx}",
-                        placeholder="F.eks. kylling i stedet",
-                        label_visibility="collapsed",
-                    )
                     if st.button("🔄 Udskift ret", key=f"replace_{idx}", use_container_width=True):
                         if not api_key.strip():
                             st.error("Indtast Gemini API-nøgle i sidepanelet.")
@@ -309,7 +303,6 @@ with tab_plan:
                                         adults=int(adults),
                                         children=int(children),
                                         preferences=preferences,
-                                        custom_note=custom_note,
                                         model_name=DEFAULT_MODEL,
                                     )
                                     plan.days[idx] = new_day
