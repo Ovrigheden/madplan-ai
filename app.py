@@ -9,6 +9,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from src.filter import filter_food_offers
+from src.images import generate_dish_image, generate_plan_images
 from src.models import Offer, WeeklyMealPlan
 from src.offers import (
     ALL_STORES,
@@ -69,30 +70,54 @@ def _init_state() -> None:
         st.session_state["location_label"] = "Herning"
     if "meal_plan" not in st.session_state:
         st.session_state["meal_plan"] = None
+    if "meal_images" not in st.session_state:
+        st.session_state["meal_images"] = {}
+    if "image_warnings" not in st.session_state:
+        st.session_state["image_warnings"] = []
     if "pdf_include_recipes" not in st.session_state:
         st.session_state["pdf_include_recipes"] = True
+    if "pdf_include_images" not in st.session_state:
+        st.session_state["pdf_include_images"] = True
 
 
-def _sync_recipes_checkbox(widget_key: str) -> None:
-    st.session_state["pdf_include_recipes"] = bool(st.session_state[widget_key])
+def _sync_checkbox(state_key: str, widget_key: str) -> None:
+    st.session_state[state_key] = bool(st.session_state[widget_key])
 
 
 def _render_export_bar(plan: WeeklyMealPlan, key_prefix: str) -> None:
     """Viser boks med valg til PDF-udskrift samt download-knapper til PDF og Markdown."""
-    widget_key = f"{key_prefix}_pdf_recipes"
-    st.session_state[widget_key] = st.session_state["pdf_include_recipes"]
+    recipes_key = f"{key_prefix}_pdf_recipes"
+    images_key = f"{key_prefix}_pdf_images"
+    st.session_state[recipes_key] = st.session_state["pdf_include_recipes"]
+    st.session_state[images_key] = st.session_state["pdf_include_images"]
+
     with st.container(border=True):
-        include_recipes = st.checkbox(
-            "Medtag tilberedningstrin (opskrifter) i PDF-udskriften",
-            key=widget_key,
-            on_change=_sync_recipes_checkbox,
-            args=(widget_key,),
-        )
+        c_opt1, c_opt2 = st.columns(2)
+        with c_opt1:
+            include_recipes = st.checkbox(
+                "Medtag tilberedningstrin (opskrifter) i PDF",
+                key=recipes_key,
+                on_change=_sync_checkbox,
+                args=("pdf_include_recipes", recipes_key),
+            )
+        with c_opt2:
+            include_images = st.checkbox(
+                "Medtag madfotos i PDF",
+                key=images_key,
+                on_change=_sync_checkbox,
+                args=("pdf_include_images", images_key),
+            )
+
         col_pdf, col_md = st.columns([2, 1])
         with col_pdf:
             st.download_button(
                 label="🖨️ Download printklar PDF (A4)",
-                data=build_meal_plan_pdf(plan, include_recipes=include_recipes),
+                data=build_meal_plan_pdf(
+                    plan,
+                    include_recipes=include_recipes,
+                    meal_images=st.session_state["meal_images"],
+                    include_images=include_images,
+                ),
                 file_name="ugens_madplan_og_indkoeb.pdf",
                 mime="application/pdf",
                 type="primary",
@@ -311,6 +336,13 @@ with tab_plan:
                         model_name=DEFAULT_MODEL,
                     )
                     st.session_state["meal_plan"] = plan
+                    with st.spinner("Genererer madfotos til ugens retter..."):
+                        images, img_warnings = generate_plan_images(
+                            api_key=api_key,
+                            plan=plan,
+                        )
+                    st.session_state["meal_images"] = images
+                    st.session_state["image_warnings"] = img_warnings
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Fejl under generering af madplan: {exc}")
@@ -321,9 +353,17 @@ with tab_plan:
         st.caption(f"💡 {plan.estimated_offer_savings_note}")
         _render_export_bar(plan, key_prefix="plan")
 
+        for img_w in st.session_state["image_warnings"]:
+            st.warning(img_w)
+
         for idx, day in enumerate(plan.days):
             with st.container(border=True):
-                header_col, action_col = st.columns([3, 1])
+                img_bytes = st.session_state["meal_images"].get(idx)
+                if img_bytes:
+                    img_col, header_col, action_col = st.columns([1.2, 2.8, 1])
+                    img_col.image(img_bytes, use_container_width=True)
+                else:
+                    header_col, action_col = st.columns([3, 1])
                 badge = "♻️ Restedag" if day.is_leftover_day else f"⏱️ {day.prep_time_minutes} min"
                 header_col.subheader(f"{day.day}: {day.dish_name}  ·  {badge}")
                 header_col.write(day.description)
@@ -367,6 +407,21 @@ with tab_plan:
                                     )
                                     plan.days[idx] = new_day
                                     st.session_state["meal_plan"] = plan
+                                    try:
+                                        st.session_state["meal_images"][idx] = generate_dish_image(
+                                            api_key=api_key,
+                                            day=new_day,
+                                        )
+                                        st.session_state["image_warnings"] = [
+                                            w
+                                            for w in st.session_state["image_warnings"]
+                                            if not w.startswith(f"{new_day.day}:")
+                                        ]
+                                    except Exception as img_exc:
+                                        st.session_state["meal_images"].pop(idx, None)
+                                        st.session_state["image_warnings"].append(
+                                            f"{new_day.day}: Kunne ikke generere nyt foto ({img_exc})"
+                                        )
                                     st.rerun()
                                 except Exception as exc:
                                     st.error(f"Kunne ikke udskifte ret: {exc}")
