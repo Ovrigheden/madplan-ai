@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import os
 
@@ -22,6 +23,15 @@ from src.offers import (
 )
 from src.pdf_export import build_direct_print_html, build_meal_plan_pdf
 from src.planner import DEFAULT_MODEL, generate_weekly_plan, replace_single_day
+from src.storage import (
+    LoadedPlan,
+    PlanStorage,
+    SavedPlanMeta,
+    create_plan_storage,
+    format_danish_timestamp,
+    make_extra_item_id,
+    make_store_item_id,
+)
 
 load_dotenv()
 
@@ -141,6 +151,29 @@ def _inject_custom_css() -> None:
             color: #1F2933;
             margin-bottom: 0.25rem;
         }
+        .active-plan-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+            align-items: center;
+            margin: 0.35rem 0 0.65rem 0;
+        }
+        .pill-active {
+            background: #2E6F40;
+            color: #FFFFFF;
+        }
+        .archive-summary {
+            margin: 0.35rem 0 0 0;
+            font-size: 0.9rem;
+            color: #52606D;
+            line-height: 1.4;
+        }
+        .archive-dishes {
+            margin: 0.2rem 0 0 0;
+            font-size: 0.92rem;
+            font-weight: 600;
+            color: #215330;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -193,6 +226,129 @@ def _init_state() -> None:
         st.session_state["pdf_include_recipes"] = True
     if "pdf_include_images" not in st.session_state:
         st.session_state["pdf_include_images"] = True
+    if "storage_initialized" not in st.session_state:
+        st.session_state["storage_initialized"] = False
+    if "active_plan_id" not in st.session_state:
+        st.session_state["active_plan_id"] = None
+    if "active_plan_title" not in st.session_state:
+        st.session_state["active_plan_title"] = ""
+    if "checked_items" not in st.session_state:
+        st.session_state["checked_items"] = set()
+    if "saved_plans_index" not in st.session_state:
+        st.session_state["saved_plans_index"] = []
+    if "confirm_delete_plan_id" not in st.session_state:
+        st.session_state["confirm_delete_plan_id"] = None
+    if "storage_error" not in st.session_state:
+        st.session_state["storage_error"] = None
+    if "save_notice" not in st.session_state:
+        st.session_state["save_notice"] = None
+
+
+@st.cache_resource
+def _get_storage_and_warning() -> tuple[PlanStorage, str | None]:
+    """Opretter og cacher lagringsklient (Firebase Firestore eller lokalt lager)."""
+    secrets_mapping: dict[str, object] | None = None
+    try:
+        secrets_mapping = {key: st.secrets[key] for key in st.secrets.keys()}
+    except Exception:
+        secrets_mapping = None
+    return create_plan_storage(secrets_mapping)
+
+
+def _clear_shopping_widget_keys() -> None:
+    """Fjerner indkøbs-widget-keys så checkboxes læser frisk fra checked_items."""
+    for key in [k for k in st.session_state.keys() if str(k).startswith("chk_")]:
+        del st.session_state[key]
+
+
+def _apply_loaded_plan(loaded: LoadedPlan | None) -> None:
+    """Opdaterer session state med en indlæst madplan (eller nulstiller hvis None)."""
+    _clear_shopping_widget_keys()
+    st.session_state["image_warnings"] = []
+    if loaded is None:
+        st.session_state["meal_plan"] = None
+        st.session_state["meal_images"] = {}
+        st.session_state["checked_items"] = set()
+        st.session_state["active_plan_id"] = None
+        st.session_state["active_plan_title"] = ""
+        return
+
+    st.session_state["meal_plan"] = loaded.plan
+    st.session_state["meal_images"] = dict(loaded.images)
+    st.session_state["checked_items"] = set(loaded.checked_items)
+    st.session_state["active_plan_id"] = loaded.meta.id
+    st.session_state["active_plan_title"] = loaded.meta.title
+
+
+def _refresh_from_storage(
+    storage: PlanStorage,
+    *,
+    load_active: bool = True,
+    target_plan_id: str | None = None,
+) -> None:
+    """Henter arkivliste og evt. aktiv madplan fra skylager/lokalt lager."""
+    try:
+        plans_index = storage.list_plans()
+        st.session_state["saved_plans_index"] = plans_index
+
+        if load_active:
+            desired_id = target_plan_id or storage.get_active_plan_id()
+            loaded = storage.load_plan(desired_id) if desired_id else None
+            if loaded is None and plans_index:
+                fallback_id = plans_index[0].id
+                loaded = storage.load_plan(fallback_id)
+                if loaded is not None:
+                    storage.set_active_plan_id(fallback_id)
+            _apply_loaded_plan(loaded)
+
+        st.session_state["storage_error"] = None
+    except Exception as exc:
+        st.session_state["storage_error"] = (
+            f"Kunne ikke hente gemte madplaner fra {storage.backend_label}: {exc}"
+        )
+
+
+def _sync_local_checked_count(plan_id: str | None, checked_count: int) -> None:
+    """Opdaterer checked_count i den cachede arkivliste i session_state."""
+    if not plan_id:
+        return
+    for meta in st.session_state["saved_plans_index"]:
+        if meta.id == plan_id:
+            meta.checked_count = checked_count
+            break
+
+
+def _on_toggle_shopping_item(
+    storage: PlanStorage,
+    plan_id: str | None,
+    item_id: str,
+    widget_key: str,
+) -> None:
+    """Gemmer afkrydsning på indkøbslisten med det samme i session state og lager."""
+    checked_set: set[str] = set(st.session_state.get("checked_items") or set())
+    if st.session_state.get(widget_key):
+        checked_set.add(item_id)
+    else:
+        checked_set.discard(item_id)
+    st.session_state["checked_items"] = checked_set
+
+    if not plan_id:
+        return
+
+    try:
+        storage.update_checked_items(plan_id, checked_set)
+        _sync_local_checked_count(plan_id, len(checked_set))
+        st.session_state["storage_error"] = None
+    except Exception as exc:
+        st.session_state["storage_error"] = (
+            f"Afkrydsning blev gemt lokalt i browseren, men kunne ikke synkroniseres til {storage.backend_label}: {exc}"
+        )
+
+
+def _shopping_widget_key(plan_id: str | None, item_id: str) -> str:
+    """Danner en unik Streamlit widget-nøgle bundet til plan_id og vare-ID."""
+    digest = hashlib.md5(item_id.encode("utf-8")).hexdigest()[:12]
+    return f"chk_{plan_id or 'tmp'}_{digest}"
 
 
 def _sync_checkbox(state_key: str, widget_key: str) -> None:
@@ -315,6 +471,11 @@ _init_state()
 _inject_custom_css()
 _require_password_if_configured()
 
+storage, storage_init_warning = _get_storage_and_warning()
+if not st.session_state["storage_initialized"]:
+    _refresh_from_storage(storage, load_active=True)
+    st.session_state["storage_initialized"] = True
+
 st.markdown(
     '<div class="hero-banner">'
     '<h1 class="hero-title">🛒 Madplan AI – Ugens Tilbud</h1>'
@@ -409,21 +570,40 @@ with st.sidebar:
                 type="password",
                 help="Indtast din Gemini API-nøgle fra Google AI Studio.",
             )
-        st.caption("🤖 AI-model: Gemini 3.8 Flash")
+        st.caption("🤖 Tekstmodel: Gemini 3.8 Flash")
+        st.caption("📸 Billedmodel: Gemini 3.1 Flash Image")
+        if storage.backend_name == "firebase":
+            st.caption("☁️ Skylager: Firebase Firestore")
+        else:
+            st.caption("💾 Lager: Lokalt (Firebase ej tilsluttet)")
 
 
 # --- HOVEDINDHOLD ---
 offers: list[Offer] = st.session_state["offers"]
 warnings: list[str] = st.session_state["offer_warnings"]
+saved_plans: list[SavedPlanMeta] = st.session_state["saved_plans_index"]
 
 for w in warnings:
     st.warning(w)
 
-tab_plan, tab_shop, tab_offers = st.tabs(
-    ["📅 Ugens Madplan", "🛍️ Indkøbsliste", f"🏷️ Hentede Tilbud ({len(offers)})"]
+tab_plan, tab_shop, tab_archive, tab_offers = st.tabs(
+    [
+        "📅 Ugens Madplan",
+        "🛍️ Indkøbsliste",
+        f"📚 Gemte planer ({len(saved_plans)})",
+        f"🏷️ Hentede Tilbud ({len(offers)})",
+    ]
 )
 
 with tab_plan:
+    if st.session_state.get("save_notice"):
+        st.success(st.session_state["save_notice"])
+        st.session_state["save_notice"] = None
+    if storage_init_warning:
+        st.warning(storage_init_warning)
+    if st.session_state.get("storage_error"):
+        st.warning(st.session_state["storage_error"])
+
     active_offers = [o for o in offers if o.selected]
 
     col_btn, col_info = st.columns([1, 2])
@@ -467,15 +647,58 @@ with tab_plan:
                         )
                     st.session_state["meal_images"] = images
                     st.session_state["image_warnings"] = img_warnings
+                    _clear_shopping_widget_keys()
+                    st.session_state["checked_items"] = set()
+                    st.session_state["confirm_delete_plan_id"] = None
+
+                    try:
+                        saved_meta = storage.save_new_plan(
+                            plan=plan,
+                            images=images,
+                            location_label=st.session_state["location_label"],
+                        )
+                        st.session_state["active_plan_id"] = saved_meta.id
+                        st.session_state["active_plan_title"] = saved_meta.title
+                        st.session_state["saved_plans_index"] = storage.list_plans()
+                        st.session_state["storage_error"] = None
+                        st.session_state["save_notice"] = (
+                            "☁️ Madplanen er automatisk gemt i Firebase Firestore."
+                            if storage.backend_name == "firebase"
+                            else "💾 Madplanen er automatisk gemt lokalt."
+                        )
+                    except Exception as save_exc:
+                        st.session_state["active_plan_id"] = None
+                        st.session_state["active_plan_title"] = "Ikke gemt i skyen"
+                        st.session_state["storage_error"] = (
+                            f"Madplanen blev genereret, men kunne ikke gemmes i {storage.backend_label}: {save_exc}"
+                        )
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Fejl under generering af madplan: {exc}")
 
     plan: WeeklyMealPlan | None = st.session_state["meal_plan"]
     if plan is not None:
+        backend_badge = (
+            "☁️ Gemt i Firebase Firestore"
+            if storage.backend_name == "firebase"
+            else "💾 Gemt lokalt"
+        )
+        plan_title_display = st.session_state.get("active_plan_title") or "Aktiv ugeplan"
+        st.markdown(
+            '<div class="active-plan-bar">'
+            f'<span class="pill pill-active">⭐ {html.escape(plan_title_display, quote=True)}</span>'
+            f'<span class="pill pill-time">{html.escape(backend_badge, quote=True)}</span>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
         m1, m2, m3 = st.columns(3)
         m1.metric("🏬 Brugte butikker", len(plan.shopping_list_by_store))
-        m2.metric("🏷️ Udvalgte tilbud", len(active_offers))
+        if active_offers:
+            m2.metric("🏷️ Udvalgte tilbud", len(active_offers))
+        else:
+            plan_offer_count = sum(len(d.offer_ingredients) for d in plan.days)
+            m2.metric("🏷️ Tilbudsvarer i planen", plan_offer_count)
         m3.metric(
             "♻️ Restedage",
             sum(1 for d in plan.days if d.is_leftover_day),
@@ -571,6 +794,27 @@ with tab_plan:
                                         st.session_state["image_warnings"].append(
                                             f"{new_day.day}: Kunne ikke generere nyt foto ({img_exc})"
                                         )
+
+                                    active_id = st.session_state.get("active_plan_id")
+                                    if active_id:
+                                        try:
+                                            storage.update_plan_and_day_image(
+                                                plan_id=active_id,
+                                                plan=plan,
+                                                day_idx=idx,
+                                                image_bytes=st.session_state["meal_images"].get(idx),
+                                            )
+                                            st.session_state["saved_plans_index"] = storage.list_plans()
+                                            st.session_state["storage_error"] = None
+                                            st.session_state["save_notice"] = (
+                                                f"☁️ {new_day.day}s nye ret er opdateret i Firebase Firestore."
+                                                if storage.backend_name == "firebase"
+                                                else f"💾 {new_day.day}s nye ret er opdateret lokalt."
+                                            )
+                                        except Exception as save_exc:
+                                            st.session_state["storage_error"] = (
+                                                f"Kunne ikke opdatere den gemte plan i {storage.backend_label}: {save_exc}"
+                                            )
                                     st.rerun()
                                 except Exception as exc:
                                     st.error(f"Kunne ikke udskifte ret: {exc}")
@@ -578,12 +822,14 @@ with tab_plan:
 with tab_shop:
     plan = st.session_state["meal_plan"]
     if plan is None:
-        st.info("Generér en madplan først for at se den samlede indkøbsliste.")
+        st.info("Generér en madplan først (eller åbn en fra **📚 Gemte planer**) for at se indkøbslisten.")
     else:
         _render_export_bar(plan, key_prefix="shop")
         progress_slot = st.empty()
+        active_plan_id: str | None = st.session_state.get("active_plan_id")
+        checked_items_set: set[str] = st.session_state["checked_items"]
         total_items = 0
-        checked_items = 0
+        checked_count = 0
 
         if plan.shopping_list_by_store:
             st.subheader("Tilbudsvarer opdelt pr. butik")
@@ -594,11 +840,16 @@ with tab_shop:
                         st.markdown(f"### 🏬 {store_group.store_name}")
                         for item_i, item in enumerate(store_group.items):
                             total_items += 1
+                            item_id = make_store_item_id(store_group.store_name, item_i, item)
+                            wkey = _shopping_widget_key(active_plan_id, item_id)
                             if st.checkbox(
                                 item,
-                                key=f"shop_{idx}_{item_i}_{item}",
+                                value=(item_id in checked_items_set),
+                                key=wkey,
+                                on_change=_on_toggle_shopping_item,
+                                args=(storage, active_plan_id, item_id, wkey),
                             ):
-                                checked_items += 1
+                                checked_count += 1
 
         col_extra, col_pantry = st.columns(2)
         with col_extra:
@@ -607,8 +858,16 @@ with tab_shop:
                 if plan.extra_items_to_buy:
                     for i, item in enumerate(plan.extra_items_to_buy):
                         total_items += 1
-                        if st.checkbox(item, key=f"extra_{i}_{item}"):
-                            checked_items += 1
+                        item_id = make_extra_item_id(i, item)
+                        wkey = _shopping_widget_key(active_plan_id, item_id)
+                        if st.checkbox(
+                            item,
+                            value=(item_id in checked_items_set),
+                            key=wkey,
+                            on_change=_on_toggle_shopping_item,
+                            args=(storage, active_plan_id, item_id, wkey),
+                        ):
+                            checked_count += 1
                 else:
                     st.write("Ingen øvrige indkøb.")
 
@@ -623,18 +882,201 @@ with tab_shop:
 
         if total_items > 0:
             with progress_slot.container(border=True):
-                pct = checked_items / total_items
-                if checked_items == total_items:
+                pct = checked_count / total_items
+                if checked_count == total_items:
                     st.markdown(
                         f'<div class="progress-label">🎉 Alle {total_items} varer er lagt i kurven!</div>',
                         unsafe_allow_html=True,
                     )
                 else:
                     st.markdown(
-                        f'<div class="progress-label">🛍️ Lagt i kurven: {checked_items} af {total_items} varer</div>',
+                        f'<div class="progress-label">🛍️ Lagt i kurven: {checked_count} af {total_items} varer</div>',
                         unsafe_allow_html=True,
                     )
                 st.progress(pct)
+
+                btn_col1, btn_col2, _ = st.columns([1.15, 1.15, 2.7])
+                with btn_col1:
+                    if st.button("🔄 Synk fra skyen", key="btn_sync_shop", use_container_width=True):
+                        _refresh_from_storage(
+                            storage,
+                            load_active=True,
+                            target_plan_id=active_plan_id,
+                        )
+                        st.rerun()
+                with btn_col2:
+                    if checked_count > 0 and st.button(
+                        "🧹 Nulstil kurv",
+                        key="btn_reset_shop",
+                        use_container_width=True,
+                    ):
+                        st.session_state["checked_items"] = set()
+                        _clear_shopping_widget_keys()
+                        if active_plan_id:
+                            try:
+                                storage.update_checked_items(active_plan_id, set())
+                                _sync_local_checked_count(active_plan_id, 0)
+                                st.session_state["storage_error"] = None
+                            except Exception as exc:
+                                st.session_state["storage_error"] = (
+                                    f"Kunne ikke nulstille kurven i {storage.backend_label}: {exc}"
+                                )
+                        st.rerun()
+
+with tab_archive:
+    with st.container(border=True):
+        col_st, col_rf = st.columns([3.2, 1.0])
+        with col_st:
+            if storage.backend_name == "firebase":
+                st.markdown(
+                    "**☁️ Synkroniseret med Firebase Firestore** — Dine madplaner, fotos og "
+                    "afkrydsninger gemmes fast i skyen på tværs af pc og mobil."
+                )
+            else:
+                st.markdown(
+                    "**💾 Gemmes lokalt på denne maskine** — Tilføj Firebase i Secrets for "
+                    "at synkronisere dine gemte planer og indkøbsliste mellem pc og mobil."
+                )
+        with col_rf:
+            if st.button("🔄 Opdatér arkiv", key="btn_refresh_archive", use_container_width=True):
+                _refresh_from_storage(storage, load_active=False)
+                st.rerun()
+
+    if st.session_state.get("storage_error"):
+        st.warning(st.session_state["storage_error"])
+
+    archive_plans: list[SavedPlanMeta] = st.session_state["saved_plans_index"]
+    if not archive_plans:
+        st.info(
+            "Ingen gemte madplaner endnu. Hent tilbud og tryk **2. Generér madplan med Gemini** "
+            "for at oprette og gemme din første ugeplan."
+        )
+    else:
+        current_active_id = st.session_state.get("active_plan_id")
+        confirm_del_id = st.session_state.get("confirm_delete_plan_id")
+
+        for meta in archive_plans:
+            is_active = meta.id == current_active_id
+            ts_label = format_danish_timestamp(meta.created_at)
+
+            pills: list[str] = []
+            if is_active:
+                pills.append('<span class="pill pill-active">⭐ Aktiv ugeplan</span>')
+            if ts_label:
+                pills.append(
+                    f'<span class="pill pill-time">🕒 {html.escape(ts_label, quote=True)}</span>'
+                )
+            pills.append(
+                f'<span class="pill pill-day">🏬 {meta.store_count} butikker</span>'
+            )
+            pills.append(
+                f'<span class="pill pill-time">📸 {meta.image_count} fotos</span>'
+            )
+            pills.append(
+                f'<span class="pill pill-time">🛍️ {meta.checked_count}/{meta.total_shop_items} i kurven</span>'
+            )
+
+            with st.container(border=True):
+                info_col, btn_col = st.columns([3.3, 1.1])
+                with info_col:
+                    dish_html = (
+                        f'<div class="archive-dishes">🍽️ {html.escape(meta.dish_preview, quote=True)}</div>'
+                        if meta.dish_preview
+                        else ""
+                    )
+                    summary_html = (
+                        f'<p class="archive-summary">{html.escape(meta.summary, quote=True)}</p>'
+                        if meta.summary
+                        else ""
+                    )
+                    st.markdown(
+                        '<div class="pill-row">' + "".join(pills) + "</div>"
+                        f'<h3 class="dish-title">{html.escape(meta.title, quote=True)}</h3>'
+                        f"{dish_html}"
+                        f"{summary_html}",
+                        unsafe_allow_html=True,
+                    )
+
+                with btn_col:
+                    if not is_active:
+                        if st.button(
+                            "📂 Åbn som aktiv",
+                            key=f"open_{meta.id}",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            try:
+                                loaded = storage.load_plan(meta.id)
+                                if loaded is None:
+                                    st.session_state["storage_error"] = (
+                                        "Madplanen blev ikke fundet i arkivet."
+                                    )
+                                    _refresh_from_storage(storage, load_active=False)
+                                else:
+                                    storage.set_active_plan_id(meta.id)
+                                    _apply_loaded_plan(loaded)
+                                    st.session_state["confirm_delete_plan_id"] = None
+                                    st.session_state["save_notice"] = (
+                                        f"📂 Åbnede '{loaded.meta.title}' som aktiv ugeplan."
+                                    )
+                            except Exception as exc:
+                                st.session_state["storage_error"] = (
+                                    f"Kunne ikke åbne madplanen: {exc}"
+                                )
+                            st.rerun()
+                    else:
+                        if st.button(
+                            "🔄 Genindlæs",
+                            key=f"reload_{meta.id}",
+                            use_container_width=True,
+                        ):
+                            _refresh_from_storage(
+                                storage,
+                                load_active=True,
+                                target_plan_id=meta.id,
+                            )
+                            st.session_state["confirm_delete_plan_id"] = None
+                            st.rerun()
+
+                    if confirm_del_id == meta.id:
+                        if st.button(
+                            "⚠️ Bekræft sletning",
+                            key=f"confirm_del_{meta.id}",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            was_active = meta.id == st.session_state.get("active_plan_id")
+                            try:
+                                next_active_id = storage.delete_plan(meta.id)
+                                st.session_state["confirm_delete_plan_id"] = None
+                                if was_active:
+                                    _refresh_from_storage(
+                                        storage,
+                                        load_active=True,
+                                        target_plan_id=next_active_id,
+                                    )
+                                else:
+                                    _refresh_from_storage(storage, load_active=False)
+                            except Exception as exc:
+                                st.session_state["storage_error"] = (
+                                    f"Kunne ikke slette madplanen fra {storage.backend_label}: {exc}"
+                                )
+                            st.rerun()
+                        if st.button(
+                            "Annullér",
+                            key=f"cancel_del_{meta.id}",
+                            use_container_width=True,
+                        ):
+                            st.session_state["confirm_delete_plan_id"] = None
+                            st.rerun()
+                    else:
+                        if st.button(
+                            "🗑️ Slet",
+                            key=f"del_{meta.id}",
+                            use_container_width=True,
+                        ):
+                            st.session_state["confirm_delete_plan_id"] = meta.id
+                            st.rerun()
 
 with tab_offers:
     if not offers:
