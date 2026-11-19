@@ -196,10 +196,9 @@ with st.sidebar:
     adults = col_a.number_input("Voksne", min_value=1, max_value=10, value=2)
     children = col_b.number_input("Børn", min_value=0, max_value=10, value=0)
     leftover_days = st.slider("Antal restedage", min_value=0, max_value=3, value=1)
-    preferences = st.text_area(
+    preferences = st.text_input(
         "Allergier eller ønsker (valgfrit)",
-        placeholder="F.eks. børnevenligt, ingen skaldyr, maks 30 min på hverdage...",
-        height=80,
+        placeholder="F.eks. hjertevenligt, uden fisk, maks 30 min på hverdage...",
     )
 
 
