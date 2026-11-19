@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import html
 import io
 from datetime import date
 
@@ -315,3 +317,317 @@ def build_meal_plan_pdf(
     )
 
     return bytes(pdf.output())
+
+
+def _html_labeled_items(label: str, items: list[str]) -> str:
+    """Returnerer HTML-afsnit for en ingrediensliste hvis der findes elementer."""
+    cleaned = [html.escape(item.strip(), quote=True) for item in items if item.strip()]
+    if not cleaned:
+        return ""
+    return (
+        f'<p class="meta"><strong>{html.escape(label, quote=True)}:</strong> '
+        f'{", ".join(cleaned)}</p>'
+    )
+
+
+def _html_shopping_group(title: str, items: list[str]) -> str:
+    """Returnerer HTML-gruppe for én butik eller indkøbskategori med afkrydsningsbokse."""
+    cleaned = [html.escape(item.strip(), quote=True) for item in items if item.strip()]
+    if not cleaned:
+        return ""
+    rows = "".join(
+        f'<li><span class="chk"></span><span>{item}</span></li>' for item in cleaned
+    )
+    return (
+        '<div class="shopping-group">'
+        f'<div class="bar">{html.escape(title, quote=True)}</div>'
+        f'<ul class="chk-list">{rows}</ul>'
+        "</div>"
+    )
+
+
+def build_direct_print_html(
+    plan: WeeklyMealPlan,
+    include_recipes: bool = True,
+    meal_images: dict[int, bytes] | None = None,
+    include_images: bool = True,
+) -> str:
+    """Bygger en printknap med skjult A4-printlayout til direkte browser-udskrift."""
+    printed_date = date.today().strftime("%d-%m-%Y")
+
+    summary_parts: list[str] = []
+    if plan.summary.strip():
+        summary_parts.append(
+            f"<p><strong>Overblik:</strong> {html.escape(plan.summary.strip(), quote=True)}</p>"
+        )
+    if plan.estimated_offer_savings_note.strip():
+        summary_parts.append(
+            "<p><strong>Tilbudsfokus:</strong> "
+            f"{html.escape(plan.estimated_offer_savings_note.strip(), quote=True)}</p>"
+        )
+    summary_html = (
+        f'<div class="summary-box">{"".join(summary_parts)}</div>' if summary_parts else ""
+    )
+
+    days_blocks: list[str] = []
+    for idx, day in enumerate(plan.days):
+        badge = "Restedag" if day.is_leftover_day else f"ca. {day.prep_time_minutes} min"
+        title_text = html.escape(f"{day.day}: {day.dish_name}  ({badge})", quote=True)
+        desc_html = (
+            f'<p class="desc">{html.escape(day.description.strip(), quote=True)}</p>'
+            if day.description.strip()
+            else ""
+        )
+        details_html = (
+            desc_html
+            + _html_labeled_items("Tilbudsvarer", day.offer_ingredients)
+            + _html_labeled_items("Øvrige varer", day.extra_ingredients)
+            + _html_labeled_items("Basisvarer", day.pantry_staples)
+        )
+
+        img_bytes = meal_images.get(idx) if (include_images and meal_images) else None
+        if img_bytes:
+            b64 = base64.b64encode(img_bytes).decode("ascii")
+            top_html = (
+                '<div class="day-top">'
+                f'<img class="dish-img" src="data:image/jpeg;base64,{b64}" '
+                f'alt="{html.escape(day.dish_name, quote=True)}" '
+                'loading="eager" decoding="sync">'
+                f'<div class="day-details">{details_html}</div>'
+                "</div>"
+            )
+        else:
+            top_html = f'<div class="day-details">{details_html}</div>'
+
+        recipes_html = ""
+        if include_recipes and day.recipe_steps:
+            steps = [
+                f"<li>{html.escape(step.strip(), quote=True)}</li>"
+                for step in day.recipe_steps
+                if step.strip()
+            ]
+            if steps:
+                recipes_html = (
+                    '<div class="recipes">'
+                    '<p class="recipes-title">Fremgangsmåde:</p>'
+                    f'<ol>{"".join(steps)}</ol>'
+                    "</div>"
+                )
+
+        days_blocks.append(
+            f'<section class="day-card"><div class="bar">{title_text}</div>{top_html}{recipes_html}</section>'
+        )
+
+    shopping_blocks = [
+        _html_shopping_group(group.store_name, group.items)
+        for group in plan.shopping_list_by_store
+    ]
+    shopping_blocks.append(
+        _html_shopping_group("Øvrige indkøb (valgfri butik)", plan.extra_items_to_buy)
+    )
+    shopping_blocks.append(
+        _html_shopping_group(
+            "Basisvarer fra køkkenskabet (tjek derhjemme)",
+            plan.pantry_staples_needed,
+        )
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<style>
+  @media screen {{
+    html, body {{
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: transparent;
+      font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }}
+    #print-doc {{
+      display: none;
+    }}
+    .print-btn {{
+      width: 100%;
+      height: 38.4px;
+      background: #ff4b4b;
+      color: #fff;
+      border: 1px solid #ff4b4b;
+      border-radius: 0.5rem;
+      font-size: 0.95rem;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.35rem;
+    }}
+    .print-btn:hover {{
+      background: #ff2b2b;
+      border-color: #ff2b2b;
+    }}
+  }}
+  @media print {{
+    @page {{
+      size: A4 portrait;
+      margin: 14mm;
+    }}
+    html, body {{
+      margin: 0 !important;
+      padding: 0 !important;
+      height: auto !important;
+      overflow: visible !important;
+      background: #ffffff !important;
+      color: #19202a !important;
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+      font-size: 9.5pt;
+      line-height: 1.38;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }}
+    .no-print {{
+      display: none !important;
+    }}
+    #print-doc {{
+      display: block !important;
+    }}
+    .doc-header {{
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      border-bottom: 1px solid #c8ced6;
+      padding-bottom: 2.5mm;
+      margin-bottom: 4mm;
+    }}
+    .doc-header h1 {{
+      margin: 0;
+      font-size: 18pt;
+      color: #19202a;
+    }}
+    .doc-header .subtitle {{
+      font-size: 9pt;
+      color: #646e7d;
+    }}
+    .summary-box {{
+      background: #f4f6f9;
+      border: 1px solid #dce0e6;
+      padding: 3mm 3.5mm;
+      margin-bottom: 5mm;
+      border-radius: 2px;
+    }}
+    .summary-box p {{
+      margin: 0 0 1.2mm 0;
+    }}
+    .summary-box p:last-child {{
+      margin-bottom: 0;
+    }}
+    .day-card {{
+      margin-bottom: 4.5mm;
+    }}
+    .bar {{
+      background: #ecf0f5;
+      color: #19202a;
+      font-weight: 700;
+      font-size: 10.5pt;
+      padding: 1.6mm 2.5mm;
+      margin-bottom: 2mm;
+      break-after: avoid;
+      page-break-after: avoid;
+    }}
+    .day-top {{
+      display: flex;
+      gap: 4mm;
+      align-items: flex-start;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }}
+    .dish-img {{
+      width: 42mm;
+      height: 31.5mm;
+      object-fit: cover;
+      border: 1px solid #d7dce2;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }}
+    .day-details {{
+      flex: 1;
+      min-width: 0;
+    }}
+    .desc {{
+      margin: 0 0 1.5mm 0;
+      color: #2d343e;
+    }}
+    .meta {{
+      margin: 0 0 1mm 0;
+      font-size: 9pt;
+    }}
+    .recipes {{
+      margin-top: 1.5mm;
+    }}
+    .recipes-title {{
+      margin: 0 0 1mm 0;
+      font-weight: 700;
+      font-size: 9pt;
+    }}
+    .recipes ol {{
+      margin: 0;
+      padding-left: 5mm;
+      font-size: 9pt;
+      color: #2d343e;
+    }}
+    .recipes li {{
+      margin-bottom: 0.7mm;
+    }}
+    .shopping-section {{
+      page-break-before: always;
+      break-before: page;
+    }}
+    .shopping-group {{
+      margin-bottom: 4mm;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }}
+    .chk-list {{
+      list-style: none;
+      margin: 0;
+      padding: 0 0 0 1mm;
+    }}
+    .chk-list li {{
+      display: flex;
+      align-items: flex-start;
+      gap: 2.5mm;
+      margin-bottom: 1.4mm;
+      font-size: 9.5pt;
+    }}
+    .chk {{
+      width: 3.4mm;
+      height: 3.4mm;
+      border: 1px solid #555;
+      display: inline-block;
+      margin-top: 0.6mm;
+      flex-shrink: 0;
+    }}
+  }}
+</style>
+</head>
+<body>
+  <button type="button" class="print-btn no-print" onclick="window.print()">🖨️ Udskriv direkte</button>
+  <div id="print-doc">
+    <div class="doc-header">
+      <h1>Ugens Madplan</h1>
+      <span class="subtitle">Udskrevet {printed_date}</span>
+    </div>
+    {summary_html}
+    {"".join(days_blocks)}
+    <div class="shopping-section">
+      <div class="doc-header">
+        <h1>Indkøbsliste</h1>
+        <span class="subtitle">Afkrydsningsliste opdelt efter butik</span>
+      </div>
+      {"".join(shopping_blocks)}
+    </div>
+  </div>
+</body>
+</html>"""
+
