@@ -7,12 +7,7 @@ from google.genai import types
 
 from src.models import MealDay, Offer, WeeklyMealPlan
 
-AVAILABLE_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.6-flash",
-    "gemini-3.1-pro-preview",
-]
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 
 def _format_offers_for_prompt(offers: list[Offer]) -> str:
@@ -32,10 +27,10 @@ def generate_weekly_plan(
     api_key: str,
     offers: list[Offer],
     adults: int = 2,
-    children: int = 2,
+    children: int = 0,
     leftover_days: int = 1,
     preferences: str = "",
-    model_name: str = "gemini-3.8-flash",
+    model_name: str = DEFAULT_MODEL,
 ) -> WeeklyMealPlan:
     """Genererer en komplet 7-dages madplan og indkøbsliste via Gemini API."""
     if not api_key.strip():
@@ -44,6 +39,9 @@ def generate_weekly_plan(
         raise ValueError("Der skal vælges mindst ét tilbud for at generere en madplan.")
 
     offers_text = _format_offers_for_prompt(offers)
+    household_str = (
+        f"{adults} voksne og {children} børn" if children > 0 else f"{adults} voksne"
+    )
     pref_block = (
         f"\n- Særlige ønsker / allergier / begrænsninger: {preferences.strip()}"
         if preferences.strip()
@@ -54,7 +52,7 @@ def generate_weekly_plan(
 Din opgave er at lave en varieret, familievenlig og realistisk aftensmadsplan for hele ugen (Mandag til Søndag) baseret på ugens aktuelle tilbud.
 
 ### Husstand og krav
-- Husstand: {adults} voksne og {children} børn.
+- Husstand: {household_str}.
 - Antal restedage: {leftover_days} (hvis >= 1, så planlæg en ret dagen før, der er nem at lave i dobbelt portion, f.eks. kødsovs, chili con carne, lasagne, suppe eller simreret).{pref_block}
 
 ### Regler for planlægning
@@ -90,10 +88,10 @@ def replace_single_day(
     day_name: str,
     offers: list[Offer],
     adults: int = 2,
-    children: int = 2,
+    children: int = 0,
     preferences: str = "",
     custom_note: str = "",
-    model_name: str = "gemini-3.8-flash",
+    model_name: str = DEFAULT_MODEL,
 ) -> MealDay:
     """Udskifter én bestemt dags ret med et nyt forslag, der passer til resten af ugen."""
     if not api_key.strip():
@@ -105,13 +103,16 @@ def replace_single_day(
         if d.day.lower() != day_name.lower()
     )
     offers_text = _format_offers_for_prompt(offers)
+    household_str = (
+        f"{adults} voksne og {children} børn" if children > 0 else f"{adults} voksne"
+    )
     note_line = f"\n- Brugerens ønske til den nye ret: {custom_note.strip()}" if custom_note.strip() else ""
     pref_line = f"\n- Generelle præferencer/allergier: {preferences.strip()}" if preferences.strip() else ""
 
     prompt = f"""Du er en erfaren dansk kok. Brugeren ønsker at udskifte aftensmaden for **{day_name}** i sin ugeplan.
 
 ### Husstand og kontekst
-- Husstand: {adults} voksne og {children} børn.{pref_line}{note_line}
+- Husstand: {household_str}.{pref_line}{note_line}
 - Øvrige retter i ugen (undgå gentagelser):
 {other_dishes}
 
