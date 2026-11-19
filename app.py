@@ -118,6 +118,10 @@ def _plan_to_markdown(plan: WeeklyMealPlan) -> str:
 
 
 _init_state()
+st.markdown(
+    "<style>[data-testid='InputInstructions'] { display: none !important; }</style>",
+    unsafe_allow_html=True,
+)
 _require_password_if_configured()
 
 st.title("🛒 Madplan AI – Ugens Tilbud")
