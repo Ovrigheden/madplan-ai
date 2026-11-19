@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import os
 
 import pandas as pd
@@ -43,6 +44,109 @@ def _get_secret(key: str, default: str = "") -> str:
         return default
 
 
+def _inject_custom_css() -> None:
+    """Tilføjer nordisk Stil A-styling med bløde kort, afrundede fotos og pille-badges."""
+    st.markdown(
+        """
+        <style>
+        [data-testid='InputInstructions'] { display: none !important; }
+        [data-testid="stImage"] img { border-radius: 12px !important; object-fit: cover; }
+        .stButton > button, .stDownloadButton > button {
+            border-radius: 10px !important;
+            font-weight: 600 !important;
+        }
+        [data-testid="stSidebar"] { border-right: 1px solid #E6E0D6; }
+        .hero-banner {
+            background: linear-gradient(135deg, #FFFFFF 0%, #F4F0E8 100%);
+            border: 1px solid #E6E0D6;
+            border-radius: 16px;
+            padding: 1.15rem 1.4rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 2px 10px rgba(31, 41, 51, 0.04);
+        }
+        .hero-title {
+            margin: 0;
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: #1F2933;
+            letter-spacing: -0.02em;
+        }
+        .hero-sub {
+            margin: 0.25rem 0 0 0;
+            font-size: 0.95rem;
+            color: #52606D;
+        }
+        .summary-card {
+            background: #FFFFFF;
+            border: 1px solid #E6E0D6;
+            border-left: 4px solid #2E6F40;
+            border-radius: 12px;
+            padding: 0.95rem 1.15rem;
+            margin: 0.75rem 0 1rem 0;
+            box-shadow: 0 1px 6px rgba(31, 41, 51, 0.03);
+            color: #1F2933;
+        }
+        .summary-note {
+            margin-top: 0.4rem;
+            font-size: 0.88rem;
+            color: #52606D;
+        }
+        .pill-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+            align-items: center;
+            margin-bottom: 0.35rem;
+        }
+        .pill {
+            display: inline-block;
+            padding: 0.18rem 0.65rem;
+            border-radius: 999px;
+            font-size: 0.76rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+        .pill-day { background: #E6F2EA; color: #215330; text-transform: uppercase; }
+        .pill-time { background: #EFEAE1; color: #4A5560; }
+        .pill-leftover { background: #FEF3C7; color: #92400E; }
+        .dish-title {
+            margin: 0.15rem 0 0.45rem 0;
+            font-size: 1.22rem;
+            font-weight: 700;
+            color: #1F2933;
+            line-height: 1.25;
+        }
+        .dish-desc {
+            margin: 0;
+            font-size: 0.94rem;
+            color: #4A5560;
+            line-height: 1.45;
+        }
+        .login-brand {
+            text-align: center;
+            padding: 0.5rem 0 0.75rem 0;
+        }
+        .login-brand h2 {
+            margin: 0.2rem 0 0.25rem 0;
+            font-size: 1.45rem;
+            color: #1F2933;
+        }
+        .login-brand p {
+            margin: 0;
+            font-size: 0.9rem;
+            color: #52606D;
+        }
+        .progress-label {
+            font-weight: 600;
+            color: #1F2933;
+            margin-bottom: 0.25rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _require_password_if_configured() -> None:
     """Kræver adgangskode hvis APP_PASSWORD er sat i .env eller Streamlit Secrets."""
     expected = _get_secret("APP_PASSWORD").strip()
@@ -51,14 +155,24 @@ def _require_password_if_configured() -> None:
     if st.session_state.get("authenticated"):
         return
 
-    st.title("🔒 Madplan AI")
-    pwd = st.text_input("Indtast adgangskode", type="password")
-    if st.button("Log ind", type="primary"):
-        if pwd == expected:
-            st.session_state["authenticated"] = True
-            st.rerun()
-        else:
-            st.error("Forkert adgangskode.")
+    _, mid_col, _ = st.columns([1, 1.35, 1])
+    with mid_col:
+        with st.container(border=True):
+            st.markdown(
+                '<div class="login-brand">'
+                '<div style="font-size: 2rem;">🛒</div>'
+                "<h2>Madplan AI</h2>"
+                "<p>Log ind for at se ugens tilbud og madplan</p>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+            pwd = st.text_input("Adgangskode", type="password")
+            if st.button("Log ind", type="primary", use_container_width=True):
+                if pwd == expected:
+                    st.session_state["authenticated"] = True
+                    st.rerun()
+                else:
+                    st.error("Forkert adgangskode.")
     st.stop()
 
 
@@ -198,44 +312,19 @@ def _plan_to_markdown(plan: WeeklyMealPlan) -> str:
 
 
 _init_state()
-st.markdown(
-    "<style>[data-testid='InputInstructions'] { display: none !important; }</style>",
-    unsafe_allow_html=True,
-)
+_inject_custom_css()
 _require_password_if_configured()
 
-st.title("🛒 Madplan AI – Ugens Tilbud")
-st.caption(
-    "Henter aktuelle tilbud fra eTilbudsavis.dk og bygger en madplan + indkøbsliste med Gemini API."
+st.markdown(
+    '<div class="hero-banner">'
+    '<h1 class="hero-title">🛒 Madplan AI – Ugens Tilbud</h1>'
+    '<p class="hero-sub">Aktuelle lokale tilbud fra eTilbudsavis.dk forvandlet til hjertevenlige madplaner og indkøbslister</p>'
+    "</div>",
+    unsafe_allow_html=True,
 )
 
 # --- SIDEPANEL ---
 with st.sidebar:
-    st.header("⚙️ Indstillinger")
-
-    env_key = _get_secret("GEMINI_API_KEY")
-    if env_key == "din_gemini_api_noegle_her":
-        env_key = ""
-
-    if env_key:
-        st.success("🔒 Gemini API-nøgle er indlæst sikkert på serveren.")
-        custom_key = st.text_input(
-            "Skift API-nøgle (valgfrit)",
-            value="",
-            type="password",
-            help="Lad feltet stå tomt for at bruge serverens nøgle.",
-        )
-        api_key = custom_key.strip() or env_key
-    else:
-        api_key = st.text_input(
-            "Gemini API-nøgle",
-            value="",
-            type="password",
-            help="Indtast din Gemini API-nøgle fra Google AI Studio.",
-        )
-    st.caption("🤖 AI-model: Gemini 3.8 Flash")
-
-    st.divider()
     st.subheader("📍 Lokation & Butikker")
     postal_code = st.text_input("Postnummer", value=DEFAULT_POSTAL_CODE, max_chars=4)
     radius_km = st.slider("Søgeradius (km)", min_value=5, max_value=40, value=15, step=5)
@@ -297,6 +386,30 @@ with st.sidebar:
         "Allergier eller ønsker (valgfrit)",
         placeholder="F.eks. hjertevenligt, uden fisk, maks 30 min på hverdage...",
     )
+
+    st.divider()
+    env_key = _get_secret("GEMINI_API_KEY")
+    if env_key == "din_gemini_api_noegle_her":
+        env_key = ""
+
+    with st.expander("⚙️ Avanceret & API", expanded=not bool(env_key)):
+        if env_key:
+            st.caption("🔒 Gemini API-nøgle er indlæst sikkert på serveren.")
+            custom_key = st.text_input(
+                "Skift API-nøgle (valgfrit)",
+                value="",
+                type="password",
+                help="Lad feltet stå tomt for at bruge serverens nøgle.",
+            )
+            api_key = custom_key.strip() or env_key
+        else:
+            api_key = st.text_input(
+                "Gemini API-nøgle",
+                value="",
+                type="password",
+                help="Indtast din Gemini API-nøgle fra Google AI Studio.",
+            )
+        st.caption("🤖 AI-model: Gemini 3.8 Flash")
 
 
 # --- HOVEDINDHOLD ---
@@ -360,8 +473,21 @@ with tab_plan:
 
     plan: WeeklyMealPlan | None = st.session_state["meal_plan"]
     if plan is not None:
-        st.success(plan.summary)
-        st.caption(f"💡 {plan.estimated_offer_savings_note}")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("🏬 Brugte butikker", len(plan.shopping_list_by_store))
+        m2.metric("🏷️ Udvalgte tilbud", len(active_offers))
+        m3.metric(
+            "♻️ Restedage",
+            sum(1 for d in plan.days if d.is_leftover_day),
+        )
+
+        st.markdown(
+            '<div class="summary-card">'
+            f'<div><strong>Ugens overblik:</strong> {html.escape(plan.summary, quote=True)}</div>'
+            f'<div class="summary-note">💡 {html.escape(plan.estimated_offer_savings_note, quote=True)}</div>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
         _render_export_bar(plan, key_prefix="plan")
 
         for img_w in st.session_state["image_warnings"]:
@@ -375,26 +501,38 @@ with tab_plan:
                     img_col.image(img_bytes, use_container_width=True)
                 else:
                     header_col, action_col = st.columns([3, 1])
-                badge = "♻️ Restedag" if day.is_leftover_day else f"⏱️ {day.prep_time_minutes} min"
-                header_col.subheader(f"{day.day}: {day.dish_name}  ·  {badge}")
-                header_col.write(day.description)
+
+                status_pill = (
+                    '<span class="pill pill-leftover">♻️ Restedag</span>'
+                    if day.is_leftover_day
+                    else f'<span class="pill pill-time">⏱️ {day.prep_time_minutes} min</span>'
+                )
+                header_col.markdown(
+                    '<div class="pill-row">'
+                    f'<span class="pill pill-day">{html.escape(day.day, quote=True)}</span>'
+                    f"{status_pill}"
+                    "</div>"
+                    f'<h3 class="dish-title">{html.escape(day.dish_name, quote=True)}</h3>'
+                    f'<p class="dish-desc">{html.escape(day.description, quote=True)}</p>',
+                    unsafe_allow_html=True,
+                )
 
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    st.markdown("**Tilbudsvarer:**")
+                    st.markdown("**🟢 Tilbudsvarer**")
                     for item in day.offer_ingredients or ["Ingen specifikke"]:
                         st.markdown(f"- {item}")
                 with c2:
-                    st.markdown("**Øvrige varer:**")
+                    st.markdown("**🧺 Øvrige varer**")
                     for item in day.extra_ingredients or ["Ingen"]:
                         st.markdown(f"- {item}")
                 with c3:
-                    st.markdown("**Basisvarer:**")
+                    st.markdown("**🧂 Basisvarer**")
                     for item in day.pantry_staples or ["Standard krydderier"]:
                         st.markdown(f"- {item}")
 
                 if day.recipe_steps:
-                    with st.expander("Vis tilberedning"):
+                    with st.expander("📖 Vis tilberedning"):
                         for step_i, step in enumerate(day.recipe_steps, start=1):
                             st.markdown(f"{step_i}. {step}")
 
@@ -443,7 +581,9 @@ with tab_shop:
         st.info("Generér en madplan først for at se den samlede indkøbsliste.")
     else:
         _render_export_bar(plan, key_prefix="shop")
-        st.divider()
+        progress_slot = st.empty()
+        total_items = 0
+        checked_items = 0
 
         if plan.shopping_list_by_store:
             st.subheader("Tilbudsvarer opdelt pr. butik")
@@ -453,10 +593,12 @@ with tab_shop:
                     with st.container(border=True):
                         st.markdown(f"### 🏬 {store_group.store_name}")
                         for item_i, item in enumerate(store_group.items):
-                            st.checkbox(
+                            total_items += 1
+                            if st.checkbox(
                                 item,
                                 key=f"shop_{idx}_{item_i}_{item}",
-                            )
+                            ):
+                                checked_items += 1
 
         col_extra, col_pantry = st.columns(2)
         with col_extra:
@@ -464,7 +606,9 @@ with tab_shop:
                 st.markdown("### 🧺 Øvrige indkøb (valgfri butik)")
                 if plan.extra_items_to_buy:
                     for i, item in enumerate(plan.extra_items_to_buy):
-                        st.checkbox(item, key=f"extra_{i}_{item}")
+                        total_items += 1
+                        if st.checkbox(item, key=f"extra_{i}_{item}"):
+                            checked_items += 1
                 else:
                     st.write("Ingen øvrige indkøb.")
 
@@ -476,6 +620,21 @@ with tab_shop:
                         st.markdown(f"- {item}")
                 else:
                     st.write("Ingen angivet.")
+
+        if total_items > 0:
+            with progress_slot.container(border=True):
+                pct = checked_items / total_items
+                if checked_items == total_items:
+                    st.markdown(
+                        f'<div class="progress-label">🎉 Alle {total_items} varer er lagt i kurven!</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        f'<div class="progress-label">🛍️ Lagt i kurven: {checked_items} af {total_items} varer</div>',
+                        unsafe_allow_html=True,
+                    )
+                st.progress(pct)
 
 with tab_offers:
     if not offers:
