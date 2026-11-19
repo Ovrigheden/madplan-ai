@@ -200,6 +200,19 @@ with st.sidebar:
     adults = col_a.number_input("Voksne", min_value=1, max_value=10, value=2)
     children = col_b.number_input("Børn", min_value=0, max_value=10, value=0)
     leftover_days = st.slider("Antal restedage", min_value=0, max_value=3, value=1)
+    max_stores_options: dict[str, int | None] = {
+        "Højst 2 butikker (anbefalet)": 2,
+        "Højst 1 butik": 1,
+        "Højst 3 butikker": 3,
+        "Alle valgte butikker (billigst)": None,
+    }
+    max_stores_label = st.selectbox(
+        "Saml indkøb i antal butikker",
+        options=list(max_stores_options.keys()),
+        index=0,
+        help="Saml så vidt muligt hele ugens indkøb i få butikker, så du ikke skal køre i 5 butikker for at spare 2 kr.",
+    )
+    max_stores = max_stores_options[max_stores_label]
     preferences = st.text_input(
         "Allergier eller ønsker (valgfrit)",
         placeholder="F.eks. hjertevenligt, uden fisk, maks 30 min på hverdage...",
@@ -250,6 +263,7 @@ with tab_plan:
                         children=int(children),
                         leftover_days=int(leftover_days),
                         preferences=preferences,
+                        max_stores=max_stores,
                         model_name=DEFAULT_MODEL,
                     )
                     st.session_state["meal_plan"] = plan
@@ -303,6 +317,7 @@ with tab_plan:
                                         adults=int(adults),
                                         children=int(children),
                                         preferences=preferences,
+                                        max_stores=max_stores,
                                         model_name=DEFAULT_MODEL,
                                     )
                                     plan.days[idx] = new_day
