@@ -17,7 +17,7 @@ from src.offers import (
     fetch_offers_for_stores,
     geocode_postal_code,
 )
-from src.planner import AVAILABLE_MODELS, generate_weekly_plan, replace_single_day
+from src.planner import DEFAULT_MODEL, generate_weekly_plan, replace_single_day
 
 load_dotenv()
 
@@ -149,7 +149,7 @@ with st.sidebar:
             type="password",
             help="Indtast din Gemini API-nøgle fra Google AI Studio.",
         )
-    model_name = st.selectbox("Gemini-model", AVAILABLE_MODELS, index=0)
+    st.caption("🤖 AI-model: Gemini 3.8 Flash")
 
     st.divider()
     st.subheader("📍 Lokation & Butikker")
@@ -194,7 +194,7 @@ with st.sidebar:
     st.subheader("👨‍👩‍👧‍👦 Husstand & Præferencer")
     col_a, col_b = st.columns(2)
     adults = col_a.number_input("Voksne", min_value=1, max_value=10, value=2)
-    children = col_b.number_input("Børn", min_value=0, max_value=10, value=2)
+    children = col_b.number_input("Børn", min_value=0, max_value=10, value=0)
     leftover_days = st.slider("Antal restedage", min_value=0, max_value=3, value=1)
     preferences = st.text_area(
         "Allergier eller ønsker (valgfrit)",
@@ -247,7 +247,7 @@ with tab_plan:
                         children=int(children),
                         leftover_days=int(leftover_days),
                         preferences=preferences,
-                        model_name=model_name,
+                        model_name=DEFAULT_MODEL,
                     )
                     st.session_state["meal_plan"] = plan
                     st.rerun()
@@ -307,7 +307,7 @@ with tab_plan:
                                         children=int(children),
                                         preferences=preferences,
                                         custom_note=custom_note,
-                                        model_name=model_name,
+                                        model_name=DEFAULT_MODEL,
                                     )
                                     plan.days[idx] = new_day
                                     st.session_state["meal_plan"] = plan
