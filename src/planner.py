@@ -30,6 +30,7 @@ def generate_weekly_plan(
     children: int = 0,
     leftover_days: int = 1,
     preferences: str = "",
+    max_stores: int | None = 2,
     model_name: str = DEFAULT_MODEL,
 ) -> WeeklyMealPlan:
     """Genererer en komplet 7-dages madplan og indkøbsliste via Gemini API."""
@@ -47,6 +48,17 @@ def generate_weekly_plan(
         if preferences.strip()
         else ""
     )
+    if max_stores is not None:
+        butik_ord = "butik" if max_stores == 1 else "butikker"
+        store_rule = (
+            f"Saml så vidt muligt hele ugens indkøb i højst {max_stores} {butik_ord} "
+            f"(vælg de butikker, der giver bedst samlet værdi for ugen, så man ikke skal køre i 5 butikker for at spare 2 kr.). "
+            f"Hvis samme vare er på tilbud i flere af de udvalgte butikker, vælg den billigste kilopris/stykpris."
+        )
+        store_list_note = f" (og højst de {max_stores} udvalgte {butik_ord})"
+    else:
+        store_rule = "Hvis samme vare er på tilbud i flere butikker, vælg den billigste kilopris/stykpris."
+        store_list_note = ""
 
     prompt = f"""Du er en erfaren dansk kok og økonomisk madplanlægger.
 Din opgave er at lave en varieret, familievenlig og realistisk aftensmadsplan for hele ugen (Mandag til Søndag) baseret på ugens aktuelle tilbud.
@@ -57,10 +69,11 @@ Din opgave er at lave en varieret, familievenlig og realistisk aftensmadsplan fo
 
 ### Regler for planlægning
 1. **Udnyt tilbuddene effektivt:** Byg retterne op omkring ugens tilbudsvarer for at holde budgettet nede. Angiv tydeligt hvilken butik og pris hver tilbudsvare kommer fra.
-2. **Minimér madspild:** Hvis der f.eks. købes et helt hvidkål, spidskål, en stor pose gulerødder eller en stor bakke kød, skal resten genbruges i en anden ret senere på ugen.
-3. **Variation:** Bland mellem kød, fisk/fjerkræ og grønt/pasta/ris i løbet af ugen.
-4. **Indkøbsliste:** Saml ALLE indkøb fra tilbuddene i `shopping_list_by_store` opdelt pr. butikskæde (kun de butikker der faktisk bruges). Læg øvrige friske varer (der ikke er på tilbud) i `extra_items_to_buy`, og almindelige basisvarer (olie, salt, peber, mel, krydderier osv.) i `pantry_staples_needed`.
-5. **Sprog:** Alt indhold skal være på naturligt dansk.
+2. **Butiksvalg og pris:** {store_rule}
+3. **Minimér madspild:** Hvis der f.eks. købes et helt hvidkål, spidskål, en stor pose gulerødder eller en stor bakke kød, skal resten genbruges i en anden ret senere på ugen.
+4. **Variation:** Bland mellem kød, fisk/fjerkræ og grønt/pasta/ris i løbet af ugen.
+5. **Indkøbsliste:** Saml ALLE indkøb fra tilbuddene i `shopping_list_by_store` opdelt pr. butikskæde (kun de butikker der faktisk bruges{store_list_note}). Læg øvrige friske varer (der ikke er på tilbud) i `extra_items_to_buy`, og almindelige basisvarer (olie, salt, peber, mel, krydderier osv.) i `pantry_staples_needed`.
+6. **Sprog:** Alt indhold skal være på naturligt dansk.
 
 ### Ugens udvalgte tilbud
 {offers_text}
@@ -91,6 +104,7 @@ def replace_single_day(
     children: int = 0,
     preferences: str = "",
     custom_note: str = "",
+    max_stores: int | None = 2,
     model_name: str = DEFAULT_MODEL,
 ) -> MealDay:
     """Udskifter én bestemt dags ret med et nyt forslag, der passer til resten af ugen."""
@@ -109,6 +123,19 @@ def replace_single_day(
     note_line = f"\n- Brugerens ønske til den nye ret: {custom_note.strip()}" if custom_note.strip() else ""
     pref_line = f"\n- Generelle præferencer/allergier: {preferences.strip()}" if preferences.strip() else ""
 
+    used_stores = [g.store_name for g in current_plan.shopping_list_by_store if g.store_name]
+    if max_stores is not None and used_stores:
+        butik_ord = "butik" if max_stores == 1 else "butikker"
+        store_constraint = (
+            f"\n- Hold dig så vidt muligt til de butikker, der allerede bruges i ugeplanen "
+            f"({', '.join(used_stores[:max_stores])}), så ugens indkøb holdes inden for højst {max_stores} {butik_ord}."
+        )
+    elif max_stores is not None:
+        butik_ord = "butik" if max_stores == 1 else "butikker"
+        store_constraint = f"\n- Hold så vidt muligt ugens indkøb inden for højst {max_stores} {butik_ord}."
+    else:
+        store_constraint = ""
+
     prompt = f"""Du er en erfaren dansk kok. Brugeren ønsker at udskifte aftensmaden for **{day_name}** i sin ugeplan.
 
 ### Husstand og kontekst
@@ -118,7 +145,7 @@ def replace_single_day(
 
 ### Krav til den nye ret for {day_name}
 - Retten skal være ny og anderledes end de øvrige dage.
-- Udnyt gerne ugens tilbud nedenfor og angiv butik + pris på tilbudsvarer.
+- Udnyt gerne ugens tilbud nedenfor og angiv butik + pris på tilbudsvarer.{store_constraint}
 - Svar udelukkende på dansk i det angivne JSON-format for denne ene dag (`day` skal være "{day_name}").
 
 ### Tilgængelige tilbud
