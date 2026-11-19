@@ -451,12 +451,12 @@ def build_direct_print_html(
     .print-btn {{
       width: 100%;
       height: 38.4px;
-      background: #ff4b4b;
+      background: #2E6F40;
       color: #fff;
-      border: 1px solid #ff4b4b;
-      border-radius: 0.5rem;
+      border: 1px solid #2E6F40;
+      border-radius: 10px;
       font-size: 0.95rem;
-      font-weight: 500;
+      font-weight: 600;
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -464,8 +464,8 @@ def build_direct_print_html(
       gap: 0.35rem;
     }}
     .print-btn:hover {{
-      background: #ff2b2b;
-      border-color: #ff2b2b;
+      background: #245933;
+      border-color: #245933;
     }}
   }}
   @media print {{
