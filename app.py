@@ -6,6 +6,7 @@ import os
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 from src.filter import filter_food_offers
@@ -18,7 +19,7 @@ from src.offers import (
     fetch_offers_for_stores,
     geocode_postal_code,
 )
-from src.pdf_export import build_meal_plan_pdf
+from src.pdf_export import build_direct_print_html, build_meal_plan_pdf
 from src.planner import DEFAULT_MODEL, generate_weekly_plan, replace_single_day
 
 load_dotenv()
@@ -95,23 +96,34 @@ def _render_export_bar(plan: WeeklyMealPlan, key_prefix: str) -> None:
         c_opt1, c_opt2 = st.columns(2)
         with c_opt1:
             include_recipes = st.checkbox(
-                "Medtag tilberedningstrin (opskrifter) i PDF",
+                "Medtag tilberedningstrin (opskrifter) i udskrift / PDF",
                 key=recipes_key,
                 on_change=_sync_checkbox,
                 args=("pdf_include_recipes", recipes_key),
             )
         with c_opt2:
             include_images = st.checkbox(
-                "Medtag madfotos i PDF",
+                "Medtag madfotos i udskrift / PDF",
                 key=images_key,
                 on_change=_sync_checkbox,
                 args=("pdf_include_images", images_key),
             )
 
-        col_pdf, col_md = st.columns([2, 1])
+        col_print, col_pdf, col_md = st.columns([1.4, 1.3, 1.0])
+        with col_print:
+            components.html(
+                build_direct_print_html(
+                    plan,
+                    include_recipes=include_recipes,
+                    meal_images=st.session_state["meal_images"],
+                    include_images=include_images,
+                ),
+                height=42,
+                scrolling=False,
+            )
         with col_pdf:
             st.download_button(
-                label="🖨️ Download printklar PDF (A4)",
+                label="📄 Download PDF (A4)",
                 data=build_meal_plan_pdf(
                     plan,
                     include_recipes=include_recipes,
@@ -120,13 +132,12 @@ def _render_export_bar(plan: WeeklyMealPlan, key_prefix: str) -> None:
                 ),
                 file_name="ugens_madplan_og_indkoeb.pdf",
                 mime="application/pdf",
-                type="primary",
                 use_container_width=True,
                 key=f"{key_prefix}_dl_pdf",
             )
         with col_md:
             st.download_button(
-                label="⬇️ Download som tekst (.md)",
+                label="⬇️ Tekst (.md)",
                 data=_plan_to_markdown(plan),
                 file_name="ugens_madplan.md",
                 mime="text/markdown",
@@ -134,7 +145,7 @@ def _render_export_bar(plan: WeeklyMealPlan, key_prefix: str) -> None:
                 key=f"{key_prefix}_dl_md",
             )
         st.caption(
-            "💡 Åbn PDF'en og tryk Udskriv (Ctrl+P på pc eller ⋮ → Udskriv på mobilen). "
+            "💡 Tryk 'Udskriv direkte' for at åbne browserens printvindue uden at downloade PDF. "
             "Indkøbslisten starter automatisk på sin egen side."
         )
 
